@@ -19,6 +19,12 @@ public sealed class AndroidSdk
     private readonly object _launchLogLock = new();
     private readonly StringBuilder _launchLog = new();
     private Process? _launchProcess;
+    public string? ScrcpyExe =>
+        new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "scrcpy", "scrcpy.exe"),
+            Path.Combine(AppContext.BaseDirectory, "scrcpy.exe")
+        }.FirstOrDefault(File.Exists);
     public string? Root { get; private set; }
     public string? EmulatorExe => Executable("emulator", "emulator.exe");
     public string? AdbExe => Executable("platform-tools", "adb.exe");
@@ -166,7 +172,7 @@ public sealed class AndroidSdk
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true
             };
-            foreach (var arg in new[] { "-avd", avdName, "-gpu", gpu, "-no-boot-anim" }) psi.ArgumentList.Add(arg);
+            foreach (var arg in new[] { "-avd", avdName, "-gpu", gpu, "-no-boot-anim", "-no-window" }) psi.ArgumentList.Add(arg);
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => CaptureLaunchOutput(e.Data);
             process.ErrorDataReceived += (_, e) => CaptureLaunchOutput(e.Data);
@@ -174,7 +180,7 @@ public sealed class AndroidSdk
             _launchProcess = process;
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            return Task.FromResult(new CommandResult(0, "Устройство запускается в отдельном окне.", ""));
+            return Task.FromResult(new CommandResult(0, "Android запускается для DroidForgeDesktop.", ""));
         }
         catch (Exception e) { return Task.FromResult(new CommandResult(-1, "", e.Message)); }
     }
@@ -245,6 +251,17 @@ public sealed class AndroidSdk
     public async Task<IReadOnlyList<string>> ListPackagesAsync()
     {
         var result = await AdbAsync("shell", "pm", "list", "packages", "-3");
+        return ParsePackages(result);
+    }
+
+    public async Task<IReadOnlyList<string>> ListAllPackagesAsync()
+    {
+        var result = await AdbAsync("shell", "pm", "list", "packages");
+        return ParsePackages(result);
+    }
+
+    private static IReadOnlyList<string> ParsePackages(CommandResult result)
+    {
         if (result.ExitCode != 0) return [];
         return result.Output.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
             .Select(x => x.Trim().StartsWith("package:") ? x.Trim()[8..] : x.Trim())
@@ -253,6 +270,63 @@ public sealed class AndroidSdk
 
     public async Task<CommandResult> OpenPackageAsync(string packageName) =>
         await AdbAsync("shell", "monkey", "-p", packageName, "-c", "android.intent.category.LAUNCHER", "1");
+
+    public async Task<CommandResult> InstallApkAsync(string apkPath)
+    {
+        if (!File.Exists(apkPath)) return new(-1, "", "Выбранный APK-файл не найден.");
+        return await AdbAsync("install", "-r", apkPath);
+    }
+
+    public async Task<string?> GetConnectedEmulatorSerialAsync()
+    {
+        if (AdbExe is null) return null;
+        var devices = await RunAsync(AdbExe, ["devices"], 10);
+        return devices.Output.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => Regex.Match(line.Trim(), "^(emulator-\\d+)\\s+device$"))
+            .FirstOrDefault(match => match.Success)?.Groups[1].Value;
+    }
+
+    public async Task<CommandResult> StartAppWindowAsync(string packageName, string title)
+    {
+        if (ScrcpyExe is null)
+            return new(-1, "", "В сборке не найден scrcpy. Скачай DroidForgeDesktop с GitHub или помести официальную сборку scrcpy рядом с программой в папку scrcpy.");
+        var serial = await GetConnectedEmulatorSerialAsync();
+        if (serial is null) return new(-1, "", "Android Emulator сейчас не подключён.");
+
+        try
+        {
+            var startInfo = new ProcessStartInfo(ScrcpyExe)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(ScrcpyExe)!
+            };
+            startInfo.Environment["ADB"] = AdbExe;
+            foreach (var arg in new[]
+            {
+                $"--serial={serial}",
+                "--new-display=1280x800/160",
+                $"--start-app={packageName}",
+                "--flex-display",
+                "--no-vd-destroy-content",
+                "--window-width=960",
+                "--window-height=640",
+                $"--window-title=DroidForge · {title}"
+            }) startInfo.ArgumentList.Add(arg);
+
+            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            if (!process.Start()) return new(-1, "", "Не удалось открыть окно Android-приложения.");
+            await Task.Delay(900);
+            if (process.HasExited)
+            {
+                var exitCode = process.ExitCode;
+                process.Dispose();
+                return new(exitCode == 0 ? 0 : exitCode, "", exitCode == 0 ? "" : "scrcpy завершился до открытия окна Android.");
+            }
+            return new(0, "Окно Android-приложения открывается.", "");
+        }
+        catch (Exception error) { return new(-1, "", error.Message); }
+    }
 
     private static Dictionary<string, string> ReadIni(string path)
     {

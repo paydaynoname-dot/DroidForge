@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private TextBlock? _bootPercentLabel;
     private TextBlock? _bootPhaseLabel;
     private TextBlock? _bootElapsedLabel;
+    private DesktopShellWindow? _desktopShell;
 
     private static readonly Brush Mint = Brush("#70F0C0");
     private static readonly Brush Muted = Brush("#8B97A9");
@@ -150,9 +151,9 @@ public partial class MainWindow : Window
         var copy = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var label = Text("ТВОЙ ANDROID. ТВОИ ПРАВИЛА.", 10, "#70F0C0", FontWeights.SemiBold); label.Margin = new Thickness(0, 0, 0, 14);
         var title = Text("Мобильный мир\nна большом экране", 30, "#F4F7FB", FontWeights.SemiBold); title.LineHeight = 39; title.Margin = new Thickness(0, 0, 0, 10);
-        var desc = Text("Запускай Android‑приложения в окне, управляй мышью и клавиатурой, подбирай память и разрешение для каждого телефона.", 13, "#B4C1CD"); desc.MaxWidth = 500; desc.Margin = new Thickness(0, 0, 0, 20);
+        var desc = Text("Открывай полноэкранный рабочий стол Windows с Android‑приложениями в отдельных окнах. Устанавливай APK, создавай файлы и пользуйся мышью и клавиатурой.", 13, "#B4C1CD"); desc.MaxWidth = 500; desc.Margin = new Thickness(0, 0, 0, 20);
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
-        actions.Children.Add(Action(_devices.Count == 0 ? "＋  Создать телефон" : "▶  Запустить устройство", async (_, _) => await LaunchSelectedAsync(), true));
+        actions.Children.Add(Action(_devices.Count == 0 ? "＋  Создать телефон" : "▶  Запустить DroidForgeDesktop", async (_, _) => await LaunchSelectedAsync(), true));
         var devicesButton = Action("Мои устройства", (_, _) => { _page = "devices"; ShowDevices(); }); devicesButton.Margin = new Thickness(10, 0, 0, 0); actions.Children.Add(devicesButton);
         copy.Children.Add(label); copy.Children.Add(title); copy.Children.Add(desc); copy.Children.Add(actions);
         Grid.SetColumn(copy, 0); heroContent.Children.Add(copy);
@@ -177,7 +178,7 @@ public partial class MainWindow : Window
             picker.SelectionChanged += (_, _) => _selectedDevice = picker.SelectedItem as string;
             devicesContent.Children.Add(picker);
             devicesContent.Children.Add(Text(_devices.FirstOrDefault(d => d.Name == _selectedDevice)?.Resolution ?? "", 11, "#8794A8"));
-            devicesContent.Children.Add(Action("▶  Запустить выбранный телефон", async (_, _) => await LaunchSelectedAsync(), true));
+            devicesContent.Children.Add(Action("▶  Запустить DroidForgeDesktop", async (_, _) => await LaunchSelectedAsync(), true));
         }
         var devicesCard = Card(devicesContent); Grid.SetColumn(devicesCard, 0); row.Children.Add(devicesCard);
         var tips = new StackPanel(); tips.Children.Add(Text("Мышь + клавиатура", 17, "#F1F4FA", FontWeights.SemiBold));
@@ -240,7 +241,7 @@ public partial class MainWindow : Window
                 var details = new StackPanel { VerticalAlignment = VerticalAlignment.Center }; details.Children.Add(Text(device.Name, 15, "#F1F4FA", FontWeights.SemiBold)); details.Children.Add(Text($"{device.Resolution}   ·   {device.CpuCores} ядра   ·   {device.RamMb / 1024d:0.#} ГБ RAM", 11, "#8693A6")); details.Margin = new Thickness(0, 2, 0, 0); Grid.SetColumn(details, 1); cardGrid.Children.Add(details);
                 var controls = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
                 controls.Children.Add(Action("Настроить", (_, _) => { _selectedDevice = device.Name; ShowDeviceEditor(device); }));
-                var run = Action("▶  Запустить", async (_, _) => { _selectedDevice = device.Name; await LaunchSelectedAsync(); }, true); run.Margin = new Thickness(8, 0, 0, 0); controls.Children.Add(run);
+                var run = Action("▶  DroidForgeDesktop", async (_, _) => { _selectedDevice = device.Name; await LaunchSelectedAsync(); }, true); run.Margin = new Thickness(8, 0, 0, 0); controls.Children.Add(run);
                 Grid.SetColumn(controls, 2); cardGrid.Children.Add(controls);
                 var card = Card(cardGrid, 18); card.Margin = new Thickness(0, 0, 0, 10); PageHost.Children.Add(card);
             }
@@ -507,7 +508,8 @@ public partial class MainWindow : Window
                 }
                 if (status.BootCompleted && status.BootAnimationFinished)
                 {
-                    UpdateBootProgress(state, 100, "Android запущен. Можно пользоваться телефоном и открыть Google Play.", completed: true);
+                    UpdateBootProgress(state, 100, "Android готов. Открываю DroidForgeDesktop…", completed: true);
+                    await OpenDesktopShellAsync(state.DeviceName);
                     return;
                 }
                 if (status.BootCompleted)
@@ -561,6 +563,12 @@ public partial class MainWindow : Window
         if (!_sdk.IsAvailable) { _page = "settings"; ShowSettings(); AddNotice("Сначала подключи Android SDK в настройках.", true); return; }
         if (_devices.Count == 0) { _page = "devices"; ShowDevices(); AddNotice("Создай виртуальное устройство перед запуском.", true); return; }
         var name = _selectedDevice ?? _devices[0].Name;
+        var currentStatus = await _sdk.GetBootStatusAsync();
+        if (currentStatus.BootCompleted && currentStatus.BootAnimationFinished)
+        {
+            await OpenDesktopShellAsync(name);
+            return;
+        }
         if (_bootProgress is { Completed: false, Failed: false } current && current.DeviceName == name)
         {
             ShowDashboard();
@@ -578,6 +586,21 @@ public partial class MainWindow : Window
         }
     }
 
+    private Task OpenDesktopShellAsync(string deviceName)
+    {
+        if (_desktopShell is { IsVisible: true }) { _desktopShell.Activate(); return Task.CompletedTask; }
+        if (_sdk.ScrcpyExe is null)
+        {
+            AddNotice("В сборке нет scrcpy для окон Android. Установи DroidForge из нового GitHub-релиза.", true);
+            return Task.CompletedTask;
+        }
+        _desktopShell = new DesktopShellWindow(_sdk, deviceName);
+        _desktopShell.Owner = this;
+        _desktopShell.Closed += (_, _) => { _desktopShell = null; Show(); Activate(); };
+        Hide();
+        _desktopShell.Show();
+        return Task.CompletedTask;
+    }
     private static void OpenUrl(string url)
     {
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }

@@ -7,3 +7,5 @@ artifacts/
 *.suo
 *.tmp
 *.log
+/DroidForgeDesktop/
+/scrcpy/

@@ -6,6 +6,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <Version>0.2.0</Version>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="scrcpy\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest">
+      <Link>scrcpy\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </Content>
+  </ItemGroup>
 
 </Project>
