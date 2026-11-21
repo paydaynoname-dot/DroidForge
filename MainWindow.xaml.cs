@@ -500,6 +500,11 @@ public partial class MainWindow : Window
             while (!cancellationToken.IsCancellationRequested && DateTime.UtcNow < timeoutAt)
             {
                 var status = await _sdk.GetBootStatusAsync();
+                if (status.LaunchError is { Length: > 0 } launchError)
+                {
+                    UpdateBootProgress(state, state.Percent, ExplainLaunchError(launchError), failed: true);
+                    return;
+                }
                 if (status.BootCompleted && status.BootAnimationFinished)
                 {
                     UpdateBootProgress(state, 100, "Android запущен. Можно пользоваться телефоном и открыть Google Play.", completed: true);
@@ -513,7 +518,7 @@ public partial class MainWindow : Window
                     UpdateBootProgress(state, 25, "Окно эмулятора запускается. Ждём подключения Android…");
                 else if (DateTime.UtcNow - state.StartedAtUtc > TimeSpan.FromSeconds(30))
                 {
-                    UpdateBootProgress(state, state.Percent, "Окно эмулятора закрылось до завершения загрузки. Проверь сообщение Android Emulator.", failed: true);
+                    UpdateBootProgress(state, state.Percent, "Эмулятор закрылся до загрузки Android. Проверь настройки устройства и свободное место на диске.", failed: true);
                     return;
                 }
                 else
@@ -530,6 +535,25 @@ public partial class MainWindow : Window
         {
             UpdateBootProgress(state, state.Percent, "Не удалось проверить загрузку: " + error.Message, failed: true);
         }
+    }
+
+    private static string ExplainLaunchError(string emulatorError)
+    {
+        if (emulatorError.Contains("Not enough space to create userdata partition", StringComparison.OrdinalIgnoreCase))
+        {
+            var numbers = System.Text.RegularExpressions.Regex.Match(emulatorError,
+                @"Available:\s*([\d.]+)\s*MB.*?need\s*([\d.]+)\s*MB", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (numbers.Success &&
+                double.TryParse(numbers.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var availableMb) &&
+                double.TryParse(numbers.Groups[2].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var neededMb))
+            {
+                var additionalGb = Math.Max(1, (int)Math.Ceiling((neededMb + 2048 - availableMb) / 1024));
+                return $"На диске C мало места: Android нужно {neededMb / 1024:0.#} ГБ, свободно {availableMb / 1024:0.#} ГБ. Освободи ещё примерно {additionalGb} ГБ на диске C и попробуй снова.";
+            }
+            return "На диске C мало места для данных Android. Освободи 2–3 ГБ и запусти устройство ещё раз.";
+        }
+
+        return "Android Emulator остановился: " + emulatorError;
     }
 
     private async Task LaunchSelectedAsync()
