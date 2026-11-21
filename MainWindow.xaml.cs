@@ -17,6 +17,12 @@ public partial class MainWindow : Window
     private string? _selectedDevice;
     private string _page = "home";
     private TextBlock? _notice;
+    private BootProgressState? _bootProgress;
+    private CancellationTokenSource? _bootMonitorCts;
+    private ProgressBar? _bootProgressBar;
+    private TextBlock? _bootPercentLabel;
+    private TextBlock? _bootPhaseLabel;
+    private TextBlock? _bootElapsedLabel;
 
     private static readonly Brush Mint = Brush("#70F0C0");
     private static readonly Brush Muted = Brush("#8B97A9");
@@ -28,6 +34,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _sdk = new AndroidSdk(_settings.SdkPath);
         Loaded += async (_, _) => { await ReloadAsync(); ShowDashboard(); };
+        Closed += (_, _) => _bootMonitorCts?.Cancel();
     }
 
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color)!);
@@ -79,6 +86,10 @@ public partial class MainWindow : Window
         Header(eyebrow, title);
         PageHost.Children.Clear();
         _notice = null;
+        _bootProgressBar = null;
+        _bootPercentLabel = null;
+        _bootPhaseLabel = null;
+        _bootElapsedLabel = null;
     }
 
     private void AddNotice(string message, bool error = false)
@@ -126,6 +137,7 @@ public partial class MainWindow : Window
     {
         _page = "home";
         ClearPage("ANDROID НА КОМПЬЮТЕРЕ", "Твоя игровая платформа");
+        if (_bootProgress is not null) PageHost.Children.Add(CreateBootProgressCard());
 
         var heroGrid = new Grid();
         heroGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.25, GridUnitType.Star) });
@@ -411,14 +423,135 @@ public partial class MainWindow : Window
 
     private sealed record GpuOption(string Label, string Mode) { public override string ToString() => Label; }
 
+    private sealed class BootProgressState(string deviceName)
+    {
+        public string DeviceName { get; } = deviceName;
+        public DateTime StartedAtUtc { get; } = DateTime.UtcNow;
+        public int Percent { get; set; } = 5;
+        public string Phase { get; set; } = "Запускаем Android Emulator…";
+        public bool Completed { get; set; }
+        public bool Failed { get; set; }
+    }
+
+    private Border CreateBootProgressCard()
+    {
+        var state = _bootProgress!;
+        var header = new Grid();
+        header.ColumnDefinitions.Add(new ColumnDefinition());
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var heading = new StackPanel();
+        heading.Children.Add(Text("ЗАПУСК ANDROID", 9, "#70F0C0", FontWeights.SemiBold));
+        heading.Children.Add(Text(state.DeviceName, 14, "#F1F4FA", FontWeights.SemiBold));
+        header.Children.Add(heading);
+        _bootPercentLabel = Text($"{state.Percent}%", 17, state.Failed ? "#FFA3A3" : "#70F0C0", FontWeights.SemiBold);
+        _bootPercentLabel.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(_bootPercentLabel, 1);
+        header.Children.Add(_bootPercentLabel);
+
+        _bootProgressBar = new ProgressBar
+        {
+            Minimum = 0, Maximum = 100, Value = state.Percent, Height = 9,
+            Foreground = state.Failed ? Brush("#FF8585") : Mint,
+            Background = Brush("#263244"), Margin = new Thickness(0, 12, 0, 8)
+        };
+        _bootPhaseLabel = Text(state.Phase, 12, state.Failed ? "#FFA3A3" : "#CBD4DF");
+        var elapsed = DateTime.UtcNow - state.StartedAtUtc;
+        _bootElapsedLabel = Text(BootElapsedText(state, elapsed), 10, "#8996AA");
+        var content = new StackPanel();
+        content.Children.Add(header);
+        content.Children.Add(_bootProgressBar);
+        content.Children.Add(_bootPhaseLabel);
+        content.Children.Add(_bootElapsedLabel);
+        var card = Card(content, 15, "#111923");
+        card.Margin = new Thickness(0, 0, 0, 16);
+        return card;
+    }
+
+    private static string BootElapsedText(BootProgressState state, TimeSpan elapsed)
+    {
+        var time = elapsed.TotalHours >= 1 ? elapsed.ToString(@"h\:mm\:ss") : elapsed.ToString(@"mm\:ss");
+        if (state.Completed) return $"Запуск завершён · {time}";
+        if (state.Failed) return $"Проверь окно эмулятора · прошло {time}";
+        return $"Прошло {time} · проценты показывают этапы запуска Android";
+    }
+
+    private void UpdateBootProgress(BootProgressState state, int percent, string phase, bool completed = false, bool failed = false)
+    {
+        state.Percent = Math.Clamp(percent, 0, 100);
+        state.Phase = phase;
+        state.Completed = completed;
+        state.Failed = failed;
+        if (_bootPercentLabel is null || _bootProgressBar is null || _bootPhaseLabel is null || _bootElapsedLabel is null) return;
+
+        _bootPercentLabel.Text = $"{state.Percent}%";
+        _bootPercentLabel.Foreground = Brush(failed ? "#FFA3A3" : "#70F0C0");
+        _bootProgressBar.Value = state.Percent;
+        _bootProgressBar.Foreground = failed ? Brush("#FF8585") : Mint;
+        _bootPhaseLabel.Text = phase;
+        _bootPhaseLabel.Foreground = Brush(failed ? "#FFA3A3" : "#CBD4DF");
+        _bootElapsedLabel.Text = BootElapsedText(state, DateTime.UtcNow - state.StartedAtUtc);
+    }
+
+    private async Task MonitorBootAsync(BootProgressState state, CancellationToken cancellationToken)
+    {
+        var timeoutAt = DateTime.UtcNow.AddMinutes(15);
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && DateTime.UtcNow < timeoutAt)
+            {
+                var status = await _sdk.GetBootStatusAsync();
+                if (status.BootCompleted && status.BootAnimationFinished)
+                {
+                    UpdateBootProgress(state, 100, "Android запущен. Можно пользоваться телефоном и открыть Google Play.", completed: true);
+                    return;
+                }
+                if (status.BootCompleted)
+                    UpdateBootProgress(state, 90, "Android загрузился, завершается подготовка интерфейса…");
+                else if (status.AdbConnected)
+                    UpdateBootProgress(state, 60, "Android подключён. Загружаются система и рабочий стол…");
+                else if (status.ProcessRunning)
+                    UpdateBootProgress(state, 25, "Окно эмулятора запускается. Ждём подключения Android…");
+                else if (DateTime.UtcNow - state.StartedAtUtc > TimeSpan.FromSeconds(30))
+                {
+                    UpdateBootProgress(state, state.Percent, "Окно эмулятора закрылось до завершения загрузки. Проверь сообщение Android Emulator.", failed: true);
+                    return;
+                }
+                else
+                    UpdateBootProgress(state, 10, "Запускаем окно эмулятора…");
+
+                await Task.Delay(1000, cancellationToken);
+            }
+
+            if (!cancellationToken.IsCancellationRequested)
+                UpdateBootProgress(state, state.Percent, "Загрузка длится дольше обычного. Проверь, открыто ли окно Android Emulator.", failed: true);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error)
+        {
+            UpdateBootProgress(state, state.Percent, "Не удалось проверить загрузку: " + error.Message, failed: true);
+        }
+    }
+
     private async Task LaunchSelectedAsync()
     {
         if (!_sdk.IsAvailable) { _page = "settings"; ShowSettings(); AddNotice("Сначала подключи Android SDK в настройках.", true); return; }
         if (_devices.Count == 0) { _page = "devices"; ShowDevices(); AddNotice("Создай виртуальное устройство перед запуском.", true); return; }
         var name = _selectedDevice ?? _devices[0].Name;
+        if (_bootProgress is { Completed: false, Failed: false } current && current.DeviceName == name)
+        {
+            ShowDashboard();
+            return;
+        }
         var result = await _sdk.StartAsync(name, _settings.GpuMode);
         if (result.ExitCode != 0) AddNotice("Не удалось запустить устройство: " + result.Error, true);
-        else AddNotice($"{name} запускается. Первое включение Android может занять несколько минут.");
+        else
+        {
+            _bootMonitorCts?.Cancel();
+            _bootProgress = new BootProgressState(name);
+            ShowDashboard();
+            _bootMonitorCts = new CancellationTokenSource();
+            _ = MonitorBootAsync(_bootProgress, _bootMonitorCts.Token);
+        }
     }
 
     private static void OpenUrl(string url)

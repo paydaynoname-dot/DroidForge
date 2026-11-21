@@ -7,6 +7,7 @@ namespace DroidForge.Services;
 
 public sealed record CommandResult(int ExitCode, string Output, string Error);
 public sealed record DeviceInfo(string Name, string? ConfigPath, string Resolution, int RamMb, int CpuCores);
+public sealed record EmulatorBootStatus(bool ProcessRunning, bool AdbConnected, bool BootCompleted, bool BootAnimationFinished);
 public sealed record SystemImageInfo(string PackageId, int ApiLevel, string Label, bool IncludesPlayStore)
 {
     public override string ToString() => Label;
@@ -151,18 +152,46 @@ public sealed class AndroidSdk
         }
     }
 
-    public async Task<CommandResult> StartAsync(string avdName, string gpu)
+    public Task<CommandResult> StartAsync(string avdName, string gpu)
     {
-        if (EmulatorExe is null) return new(-1, "", "Не найден Android Emulator.");
+        if (EmulatorExe is null) return Task.FromResult(new CommandResult(-1, "", "Не найден Android Emulator."));
         try
         {
-            var psi = NewStartInfo(EmulatorExe, ["-avd", avdName, "-gpu", gpu, "-no-boot-anim"]);
-            psi.UseShellExecute = false;
-            Process.Start(psi);
-            await Task.Delay(350);
-            return new(0, "Устройство запускается в отдельном окне.", "");
+            var psi = new ProcessStartInfo(EmulatorExe) { UseShellExecute = false, CreateNoWindow = false };
+            foreach (var arg in new[] { "-avd", avdName, "-gpu", gpu, "-no-boot-anim" }) psi.ArgumentList.Add(arg);
+            if (Process.Start(psi) is null) return Task.FromResult(new CommandResult(-1, "", "Windows не смог запустить Android Emulator."));
+            return Task.FromResult(new CommandResult(0, "Устройство запускается в отдельном окне.", ""));
         }
-        catch (Exception e) { return new(-1, "", e.Message); }
+        catch (Exception e) { return Task.FromResult(new CommandResult(-1, "", e.Message)); }
+    }
+
+    public async Task<EmulatorBootStatus> GetBootStatusAsync()
+    {
+        if (AdbExe is null) return new(IsEmulatorProcessRunning(), false, false, false);
+        var devices = await RunAsync(AdbExe, ["devices"], 10);
+        var emulatorLines = devices.Output.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => Regex.Match(line.Trim(), "^(emulator-\\d+)\\s+(\\S+)"))
+            .Where(match => match.Success).ToArray();
+        if (emulatorLines.Length == 0) return new(IsEmulatorProcessRunning(), false, false, false);
+
+        var online = emulatorLines.FirstOrDefault(match => match.Groups[2].Value.Equals("device", StringComparison.OrdinalIgnoreCase));
+        if (online is null) return new(IsEmulatorProcessRunning(), false, false, false);
+
+        var serial = online.Groups[1].Value;
+        var boot = await RunAsync(AdbExe, ["-s", serial, "shell", "getprop", "sys.boot_completed"], 10);
+        var bootCompleted = boot.ExitCode == 0 && boot.Output.Trim() == "1";
+        if (!bootCompleted) return new(IsEmulatorProcessRunning(), true, false, false);
+
+        var animation = await RunAsync(AdbExe, ["-s", serial, "shell", "getprop", "init.svc.bootanim"], 10);
+        var animationState = animation.Output.Trim();
+        var animationFinished = animation.ExitCode != 0 || animationState.Length == 0 || animationState.Equals("stopped", StringComparison.OrdinalIgnoreCase);
+        return new(IsEmulatorProcessRunning(), true, true, animationFinished);
+    }
+
+    private static bool IsEmulatorProcessRunning()
+    {
+        try { return Process.GetProcessesByName("emulator").Any(process => { try { return !process.HasExited; } catch { return false; } }); }
+        catch { return false; }
     }
 
     public async Task<CommandResult> AdbAsync(params string[] args)

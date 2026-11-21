@@ -54,7 +54,7 @@
                     <Border Background="#111823" BorderBrush="#202A39" BorderThickness="1" CornerRadius="12" Padding="12">
                         <StackPanel><StackPanel Orientation="Horizontal"><Ellipse Width="7" Height="7" Fill="#F7BD67" Margin="0,0,8,0"/><TextBlock x:Name="SidebarStatus" Text="Поиск Android SDK" FontSize="11" Foreground="#C0C9D7"/></StackPanel><TextBlock x:Name="SidebarDevice" Text="Подключите Android SDK" FontSize="10" Foreground="#77849A" Margin="15,7,0,0" TextTrimming="CharacterEllipsis"/></StackPanel>
                     </Border>
-                    <TextBlock Text="DROIDFORGE  ·  0.1.1" FontSize="9" Foreground="#596578" Margin="11,14,0,0"/>
+                    <TextBlock Text="DROIDFORGE  ·  0.1.2" FontSize="9" Foreground="#596578" Margin="11,14,0,0"/>
                 </StackPanel>
             </DockPanel>
         </Border>
