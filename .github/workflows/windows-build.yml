@@ -22,6 +22,13 @@ jobs:
         run: ./scripts/download-scrcpy.ps1
       - name: Publish self-contained Windows app
         run: dotnet publish DroidForge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/DroidForge
+      - name: Include scrcpy desktop runtime
+        shell: pwsh
+        run: |
+          $destination = Join-Path (Resolve-Path artifacts/DroidForge) 'scrcpy'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item -Path (Join-Path (Resolve-Path scrcpy) '*') -Destination $destination -Recurse -Force
+          if (-not (Test-Path (Join-Path $destination 'scrcpy.exe'))) { throw 'scrcpy.exe was not included in the Windows package.' }
       - name: Package release
         shell: pwsh
         run: Compress-Archive -Path artifacts/DroidForge/* -DestinationPath artifacts/DroidForge-win-x64.zip
