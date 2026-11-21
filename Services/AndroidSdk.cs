@@ -7,6 +7,10 @@ namespace DroidForge.Services;
 
 public sealed record CommandResult(int ExitCode, string Output, string Error);
 public sealed record DeviceInfo(string Name, string? ConfigPath, string Resolution, int RamMb, int CpuCores);
+public sealed record SystemImageInfo(string PackageId, int ApiLevel, string Label, bool IncludesPlayStore)
+{
+    public override string ToString() => Label;
+}
 
 /// <summary>Small, dependency-free bridge to the Android SDK installed by the user.</summary>
 public sealed class AndroidSdk
@@ -69,17 +73,44 @@ public sealed class AndroidSdk
         return new DeviceInfo(name, path, $"{width} × {height}", GetInt(map, "hw.ramSize", 2048), GetInt(map, "hw.cpu.ncore", 2));
     }
 
-    public bool HasSystemImage(string packageId)
+    public IReadOnlyList<SystemImageInfo> ListSystemImages()
     {
-        if (Root is null) return false;
-        var imageFolder = packageId.Replace(';', Path.DirectorySeparatorChar);
-        return Directory.Exists(Path.Combine(Root, imageFolder));
+        if (Root is null) return [];
+        var imageRoot = Path.Combine(Root, "system-images");
+        if (!Directory.Exists(imageRoot)) return [];
+
+        var images = new List<SystemImageInfo>();
+        try
+        {
+            foreach (var manifest in Directory.EnumerateFiles(imageRoot, "package.xml", SearchOption.AllDirectories))
+            {
+                var folder = Path.GetDirectoryName(manifest)!;
+                var relative = Path.GetRelativePath(Root, folder);
+                var parts = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 4 || !parts[0].Equals("system-images", StringComparison.OrdinalIgnoreCase)) continue;
+                var apiText = parts[1].StartsWith("android-", StringComparison.OrdinalIgnoreCase) ? parts[1][8..] : "";
+                if (!int.TryParse(apiText, out var api)) continue;
+
+                var flavor = parts[2];
+                var architecture = parts[3];
+                var hasPlayStore = flavor.Contains("playstore", StringComparison.OrdinalIgnoreCase);
+                var version = api switch { 35 => "15", 36 => "16", 37 => "17", _ => $"API {api}" };
+                var flavorLabel = hasPlayStore ? "Google Play Store" : flavor.Contains("google_apis", StringComparison.OrdinalIgnoreCase) ? "Google APIs" : "Android";
+                var packageId = relative.Replace(Path.DirectorySeparatorChar, ';').Replace(Path.AltDirectorySeparatorChar, ';');
+                images.Add(new SystemImageInfo(packageId, api, $"Android {version} · {flavorLabel} · {architecture}", hasPlayStore));
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        return images.DistinctBy(image => image.PackageId, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(image => image.ApiLevel).ThenByDescending(image => image.IncludesPlayStore).ToArray();
     }
 
     public async Task<CommandResult> CreateAvdAsync(string name, string packageId)
     {
         if (AvdManagerBat is null)
-            return new CommandResult(-1, "", "Не найден Android SDK Command-line Tools (avdmanager). Установите его через SDK Manager.");
+            return new CommandResult(-1, "", "Не найдены Android SDK Command-line Tools. В Android Studio откройте Tools → SDK Manager → SDK Tools и установите Android SDK Command-line Tools (latest).");
         var psi = NewStartInfo(AvdManagerBat, ["create", "avd", "-n", name, "-k", packageId]);
         psi.RedirectStandardInput = true;
         using var process = new Process { StartInfo = psi };

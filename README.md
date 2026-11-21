@@ -6,7 +6,7 @@
 
 ## Возможности
 
-- Создание виртуальных устройств из установленных Android-образов, включая образы с **Google Play Store**.
+- Создание виртуальных устройств из установленных Android-образов, включая образы с **Google Play Store**. DroidForge автоматически находит установленные версии, в том числе Android 17 (API 37).
 - Настройка RAM, количества ядер CPU, разрешения и плотности экрана для каждого телефона.
 - Запуск эмулятора с автоматической графикой, GPU компьютера или программным рендерингом.
 - Управление мышью: нажатия, свайпы и перетаскивания; ввод текста с клавиатуры компьютера.
@@ -24,7 +24,7 @@
 
 1. Установите [Android Studio](https://developer.android.com/studio).
 2. Откройте **Tools → SDK Manager**.
-3. На вкладке **SDK Tools** установите **Android Emulator** и **Android SDK Platform-Tools**.
+3. На вкладке **SDK Tools** установите **Android Emulator**, **Android SDK Platform-Tools** и **Android SDK Command-line Tools (latest)**.
 4. На вкладке **SDK Platforms** выберите версию Android. Включите **Show Package Details** и установите для неё **Google Play x86_64 System Image**.
 5. Откройте DroidForge → **Настройки** и укажите папку Android SDK. Обычно это `%LOCALAPPDATA%\Android\Sdk`.
 6. Перейдите в **Мои устройства**, выберите версию с **Google Play Store**, укажите имя и создайте телефон.

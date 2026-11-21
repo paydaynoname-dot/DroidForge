@@ -240,27 +240,35 @@ public partial class MainWindow : Window
         var form = new Grid(); form.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); form.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.35, GridUnitType.Star) });
         var nameBox = new TextBox { Text = "Pixel_Play", Margin = new Thickness(0, 9, 10, 0), Height = 39 };
         var images = new ComboBox { Margin = new Thickness(0, 9, 0, 0), Height = 39 };
-        images.Items.Add(new ImageOption("Android 16 · Google Play Store", "system-images;android-36;google_apis_playstore;x86_64"));
-        images.Items.Add(new ImageOption("Android 15 · Google Play Store", "system-images;android-35;google_apis_playstore;x86_64"));
-        images.Items.Add(new ImageOption("Android 16 · Google APIs (без Play Store)", "system-images;android-36;google_apis;x86_64")); images.SelectedIndex = 0;
+        var installedImages = _sdk.ListSystemImages();
+        foreach (var image in installedImages) images.Items.Add(image);
+        if (installedImages.Count == 0)
+        {
+            images.Items.Add("Сначала установи образ Android в SDK Manager");
+            images.SelectedIndex = 0;
+            images.IsEnabled = false;
+        }
+        else
+        {
+            var playIndex = installedImages.ToList().FindIndex(image => image.IncludesPlayStore);
+            images.SelectedIndex = playIndex >= 0 ? playIndex : 0;
+        }
         Grid.SetColumn(nameBox, 0); Grid.SetColumn(images, 1); form.Children.Add(nameBox); form.Children.Add(images); PageHost.Children.Add(form);
-        var info = Text("Образы Google Play содержат магазин приложений и сервисы Google. Если образ ещё не установлен, добавь его через Android Studio → SDK Manager → SDK Platforms.", 11, "#818EA2"); info.Margin = new Thickness(0, 8, 0, 0); PageHost.Children.Add(info);
+        var info = Text("Показываются образы, уже установленные в SDK. Google Play Store будет внутри телефона, если выбрать образ с такой пометкой.", 11, "#818EA2"); info.Margin = new Thickness(0, 8, 0, 0); PageHost.Children.Add(info);
         var create = Action("＋  Создать телефон", async (_, _) =>
         {
             if (!_sdk.IsAvailable) { AddNotice("Подключи Android SDK в настройках перед созданием устройства.", true); return; }
-            var option = images.SelectedItem as ImageOption;
+            var option = images.SelectedItem as SystemImageInfo;
             var name = nameBox.Text.Trim().Replace(' ', '_');
             if (string.IsNullOrWhiteSpace(name) || !System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z0-9_.-]+$")) { AddNotice("Имя устройства: латинские буквы, цифры, точка, дефис или подчёркивание.", true); return; }
             if (_devices.Any(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase))) { AddNotice("Устройство с таким именем уже есть.", true); return; }
-            if (option is null || !_sdk.HasSystemImage(option.PackageId)) { AddNotice($"Образ не установлен. Открой Android Studio → SDK Manager → SDK Platforms, включи «Show Package Details» и установи: {option?.PackageId}", true); return; }
+            if (option is null) { AddNotice("В SDK пока нет системного образа. В Android Studio открой SDK Manager и установи образ Google Play.", true); return; }
             var result = await _sdk.CreateAvdAsync(name, option.PackageId);
             if (result.ExitCode != 0) { AddNotice("Не удалось создать устройство: " + (result.Error + " " + result.Output).Trim(), true); return; }
             _selectedDevice = name; await ReloadAsync(); AddNotice($"Устройство {name} создано. Нажми «Запустить», чтобы открыть Android.");
         }, true);
         create.Margin = new Thickness(0, 14, 0, 0); PageHost.Children.Add(create);
     }
-
-    private sealed record ImageOption(string Label, string PackageId) { public override string ToString() => Label; }
 
     private void ShowDeviceEditor(DeviceInfo device)
     {
